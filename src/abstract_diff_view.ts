@@ -21,6 +21,8 @@ export default abstract class DiffView extends Modal {
 	rightHistory: HTMLElement[];
 	htmlConfig: Diff2HtmlConfig;
 	ids: { left: number; right: number };
+	focusedSide: 'left' | 'right';
+	keydownHandler: (e: KeyboardEvent) => void;
 
 	constructor(plugin: OpenSyncHistoryPlugin, app: App, file: TFile) {
 		super(app);
@@ -35,10 +37,12 @@ export default abstract class DiffView extends Modal {
 		this.rightContent = '';
 		this.leftContent = '';
 		this.ids = { left: 0, right: 0 };
+		this.focusedSide = 'left';
 		//@ts-expect-error, will be filled with the correct data later
 		this.leftHistory = [null];
 		//@ts-expect-error, will be filled with the correct data later
 		this.rightHistory = [null];
+		this.keydownHandler = this.handleKeydown.bind(this);
 		this.htmlConfig = {
 			diffStyle: this.plugin.settings.diffStyle,
 			matchWordsThreshold: this.plugin.settings.matchWordsThreshold,
@@ -56,26 +60,55 @@ export default abstract class DiffView extends Modal {
 
 	onOpen() {
 		super.onOpen();
-		// in onOpen() of the child classes these calls need to be implemented
+		document.addEventListener('keydown', this.keydownHandler);
+	}
 
-		// initial versions are different
-		//
+	onClose() {
+		super.onClose();
+		document.removeEventListener('keydown', this.keydownHandler);
+	}
 
-		// same
-		// const diff = this.getDiff();
-		// this.makeHistoryLists(FILE_REC_WARNING);
+	private handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'ArrowLeft') {
+			e.preventDefault();
+			this.focusedSide = 'left';
+			this.updateFocusIndicator();
+		} else if (e.key === 'ArrowRight') {
+			e.preventDefault();
+			this.focusedSide = 'right';
+			this.updateFocusIndicator();
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			this.navigateVersion(-1);
+		} else if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			this.navigateVersion(1);
+		}
+	}
 
-		// // Sync needs to make buttons as well
-		// //
+	private updateFocusIndicator() {
+		this.leftHistory[0]?.removeClass('is-focused');
+		this.rightHistory[0]?.removeClass('is-focused');
+		if (this.focusedSide === 'left') {
+			this.leftHistory[0]?.addClass('is-focused');
+		} else {
+			this.rightHistory[0]?.addClass('is-focused');
+		}
+	}
 
-		// // same
-		// this.basicHtml(diff);
+	private navigateVersion(delta: number) {
+		const isLeft = this.focusedSide === 'left';
+		const vList = isLeft ? this.leftVList : this.rightVList;
+		const currentActive = isLeft ? this.leftActive : this.rightActive;
+		const newIndex = currentActive + delta;
 
-		// // appending the versions is different
-		// //
+		if (newIndex < 0 || newIndex >= vList.length) {
+			return;
+		}
 
-		// // same
-		// this.makeMoreGeneralHtml();
+		const targetItem = vList[newIndex];
+		targetItem.html.click();
+		targetItem.html.scrollIntoView({ block: 'nearest' });
 	}
 
 	abstract getInitialVersions(): Promise<void | boolean>;
@@ -151,6 +184,8 @@ export default abstract class DiffView extends Modal {
 		// keep track of highlighted versions
 		this.rightActive = 0;
 		this.leftActive = 1;
+		// init focus indicator
+		this.updateFocusIndicator();
 	}
 
 	public async generateVersionListener(
