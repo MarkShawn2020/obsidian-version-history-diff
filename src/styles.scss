@@ -461,8 +461,7 @@ mode from @SlRvb, which fall under the same license (MIT license, @kometenstaub 
 		}
 
 		&.is-focused {
-			outline: 2px solid var(--interactive-accent);
-			outline-offset: 2px;
+			box-shadow: inset 0 0 0 2px var(--interactive-accent);
 			border-radius: 4px;
 		}
 	}
@@ -482,6 +481,52 @@ mode from @SlRvb, which fall under the same license (MIT license, @kometenstaub 
 
 	.sync-history-list-item-header.is-active:hover {
 		background-color: var(--interactive-accent-hover);
+	}
+
+	/* Diff type switcher styles */
+	.diff-title-container {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		width: 100%;
+	}
+
+	.diff-title-text {
+		font-weight: var(--font-semibold);
+		font-size: var(--font-ui-medium);
+	}
+
+	.diff-type-switcher {
+		display: flex;
+		gap: 0.25rem;
+		margin-left: auto;
+	}
+
+	.diff-type-btn {
+		padding: 0.25rem 0.75rem;
+		border: 1px solid var(--background-modifier-border);
+		border-radius: var(--radius-s);
+		background: var(--background-secondary);
+		color: var(--text-muted);
+		font-size: var(--font-ui-smaller);
+		cursor: pointer;
+		transition: all 0.15s ease;
+
+		&:hover:not(.is-disabled) {
+			background: var(--background-modifier-hover);
+			color: var(--text-normal);
+		}
+
+		&.is-active {
+			background: var(--interactive-accent);
+			color: var(--text-on-accent);
+			border-color: var(--interactive-accent);
+		}
+
+		&.is-disabled {
+			opacity: 0.5;
+			cursor: not-allowed;
+		}
 	}
 }
 @media only screen and (min-width: 1200px) {

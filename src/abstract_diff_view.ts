@@ -1,12 +1,30 @@
 import { createTwoFilesPatch } from 'diff';
 import { Diff2HtmlConfig, html } from 'diff2html';
-import { App, Modal, TFile } from 'obsidian';
-import { SYNC_WARNING } from './constants';
+import { App, Modal, Notice, setTooltip, TFile } from 'obsidian';
+import { FILE_REC_WARNING, GIT_WARNING, ITEM_CLASS, SYNC_WARNING } from './constants';
 import FileModal from './file_modal';
-import type { vItem, vRecoveryItem, vSyncItem } from './interfaces';
+import type {
+	DefaultLogFields,
+	gHResult,
+	recResult,
+	vGitItem,
+	vItem,
+	vRecoveryItem,
+	vSyncItem,
+} from './interfaces';
 import type OpenSyncHistoryPlugin from './main';
 
-export default abstract class DiffView extends Modal {
+export type DiffType = 'sync' | 'recovery' | 'git';
+
+function getSize(size: number): string {
+	if (size === 0) {
+		return '0';
+	} else {
+		return (size / 1000).toString().slice(0, -1);
+	}
+}
+
+export default class DiffView extends Modal {
 	plugin: OpenSyncHistoryPlugin;
 	app: App;
 	file: TFile;
@@ -24,11 +42,30 @@ export default abstract class DiffView extends Modal {
 	focusedSide: 'left' | 'right';
 	keydownHandler: (e: KeyboardEvent) => void;
 
-	constructor(plugin: OpenSyncHistoryPlugin, app: App, file: TFile) {
+	// Unified diff type support
+	currentType: DiffType;
+	switcherEl: HTMLElement;
+
+	// Type-specific data
+	syncVersions: gHResult;
+	recoveryVersions: recResult[];
+	gitVersions: DefaultLogFields[];
+
+	// Load more buttons (for sync)
+	leftMoreButton: HTMLDivElement | null = null;
+	rightMoreButton: HTMLDivElement | null = null;
+
+	constructor(
+		plugin: OpenSyncHistoryPlugin,
+		app: App,
+		file: TFile,
+		initialType: DiffType = 'sync'
+	) {
 		super(app);
 		this.plugin = plugin;
 		this.app = app;
 		this.file = file;
+		this.currentType = initialType;
 		this.modalEl.addClasses(['mod-sync-history', 'diff']);
 		this.leftVList = [];
 		this.rightVList = [];
@@ -56,11 +93,18 @@ export default abstract class DiffView extends Modal {
 		if (this.plugin.settings.colorBlind) {
 			this.syncHistoryContentContainer.addClass('colorblind');
 		}
+
+		// Initialize type-specific data
+		//@ts-expect-error
+		this.syncVersions = {};
+		this.recoveryVersions = [];
+		this.gitVersions = [];
 	}
 
-	onOpen() {
+	async onOpen() {
 		super.onOpen();
 		document.addEventListener('keydown', this.keydownHandler);
+		await this.loadCurrentType();
 	}
 
 	onClose() {
@@ -111,27 +155,522 @@ export default abstract class DiffView extends Modal {
 		targetItem.html.scrollIntoView({ block: 'nearest' });
 	}
 
-	abstract getInitialVersions(): Promise<void | boolean>;
+	// ========== Unified Type Switching ==========
 
-	abstract appendVersions(): void;
+	private async loadCurrentType(): Promise<void> {
+		const success = await this.initializeVersions();
+		if (success === false) return;
+
+		const diff = this.getDiff();
+		this.makeHistoryLists(this.getWarning());
+		if (this.currentType === 'sync') {
+			this.makeSyncButtons();
+		}
+		this.basicHtml(diff, this.getTitle());
+		this.appendVersions();
+		this.makeMoreGeneralHtml();
+	}
+
+	async switchTo(type: DiffType): Promise<void> {
+		if (type === this.currentType) return;
+
+		// Check availability
+		if (type === 'git' && !this.app.plugins.plugins['obsidian-git']) {
+			new Notice('Obsidian Git is not enabled');
+			return;
+		}
+
+		this.currentType = type;
+		await this.reset();
+		await this.loadCurrentType();
+		this.updateSwitcherActive();
+	}
+
+	private async reset(): Promise<void> {
+		// Clear DOM
+		this.contentEl.empty();
+
+		// Recreate content container
+		// @ts-ignore
+		this.syncHistoryContentContainer = this.contentEl.createDiv({
+			cls: ['sync-history-content-container', 'diff'],
+		});
+		if (this.plugin.settings.colorBlind) {
+			this.syncHistoryContentContainer.addClass('colorblind');
+		}
+
+		// Reset state
+		this.leftVList = [];
+		this.rightVList = [];
+		this.leftActive = 1;
+		this.rightActive = 0;
+		this.leftContent = '';
+		this.rightContent = '';
+		this.ids = { left: 0, right: 0 };
+		//@ts-expect-error
+		this.leftHistory = [null];
+		//@ts-expect-error
+		this.rightHistory = [null];
+		this.leftMoreButton = null;
+		this.rightMoreButton = null;
+
+		// Reset type-specific data
+		//@ts-expect-error
+		this.syncVersions = {};
+		this.recoveryVersions = [];
+		this.gitVersions = [];
+	}
+
+	private getWarning(): string {
+		switch (this.currentType) {
+			case 'sync':
+				return SYNC_WARNING;
+			case 'recovery':
+				return FILE_REC_WARNING;
+			case 'git':
+				return GIT_WARNING;
+		}
+	}
+
+	private getTitle(): string {
+		switch (this.currentType) {
+			case 'sync':
+				return 'Sync Diff';
+			case 'recovery':
+				return 'File Recovery Diff';
+			case 'git':
+				return 'Git Diff';
+		}
+	}
+
+	// ========== Version Initialization (by type) ==========
+
+	private async initializeVersions(): Promise<void | boolean> {
+		switch (this.currentType) {
+			case 'sync':
+				return this.initSyncVersions();
+			case 'recovery':
+				return this.initRecoveryVersions();
+			case 'git':
+				return this.initGitVersions();
+		}
+	}
+
+	private async initSyncVersions(): Promise<void | boolean> {
+		this.syncVersions = await this.plugin.diff_utils.getVersions(this.file);
+		let [latestV, secondLatestV] = [0, 0];
+		if (this.syncVersions.items.length > 1) {
+			latestV = this.syncVersions.items[0].uid;
+			secondLatestV = this.syncVersions.items[1].uid;
+		} else {
+			new Notice('There are not at least two versions.');
+			return false;
+		}
+
+		const getContent = this.plugin.diff_utils.getContent.bind(this);
+		[this.leftContent, this.rightContent] = [
+			await getContent(secondLatestV),
+			await getContent(latestV),
+		];
+	}
+
+	private async initRecoveryVersions(): Promise<void | boolean> {
+		const fileRecovery = await this.app.internalPlugins.plugins[
+			'file-recovery'
+		].instance.db
+			.transaction('backups', 'readonly')
+			.store.index('path')
+			.getAll();
+		const fileContent = await this.app.vault.read(this.file);
+		this.recoveryVersions.push({
+			path: this.file.path,
+			ts: 0,
+			data: fileContent,
+		});
+		const len = fileRecovery.length - 1;
+		for (let i = len; i >= 0; i--) {
+			const version = fileRecovery[i];
+			if (version.path === this.file.path) {
+				this.recoveryVersions.push(version);
+			}
+		}
+		if (!(this.recoveryVersions.length > 1)) {
+			new Notice('There is not at least one version in the file recovery.');
+			return false;
+		}
+
+		[this.leftContent, this.rightContent] = [
+			this.recoveryVersions[1].data,
+			this.recoveryVersions[0].data,
+		];
+	}
+
+	private async initGitVersions(): Promise<void | boolean> {
+		const { gitManager } = this.app.plugins.plugins['obsidian-git'];
+		const gitVersions = await gitManager.log(this.file.path);
+		if (gitVersions.length === 0) {
+			new Notice('There are no commits for this file.');
+			return false;
+		}
+		this.gitVersions.push({
+			author_email: '',
+			author_name: '',
+			body: '',
+			date: new Date().toLocaleTimeString(),
+			hash: '',
+			message: '',
+			refs: '',
+			fileName: this.file.name,
+		});
+		this.gitVersions.push(...gitVersions);
+		const diskContent = await this.app.vault.read(this.file);
+		const latestCommit = await gitManager.show(
+			this.gitVersions[1].hash,
+			this.file.path
+		);
+		[this.leftContent, this.rightContent] = [latestCommit, diskContent];
+	}
+
+	// ========== Version Appending (by type) ==========
+
+	private appendVersions(): void {
+		switch (this.currentType) {
+			case 'sync':
+				this.leftVList.push(
+					...this.appendSyncVersions(
+						this.leftHistory[1],
+						this.syncVersions,
+						true
+					)
+				);
+				this.rightVList.push(
+					...this.appendSyncVersions(
+						this.rightHistory[1],
+						this.syncVersions,
+						false
+					)
+				);
+				break;
+			case 'recovery':
+				this.leftVList.push(
+					...this.appendRecoveryVersions(
+						this.leftHistory[1],
+						this.recoveryVersions,
+						true
+					)
+				);
+				this.rightVList.push(
+					...this.appendRecoveryVersions(
+						this.rightHistory[1],
+						this.recoveryVersions,
+						false
+					)
+				);
+				break;
+			case 'git':
+				this.leftVList.push(
+					...this.appendGitVersions(
+						this.leftHistory[1],
+						this.gitVersions,
+						true
+					)
+				);
+				this.rightVList.push(
+					...this.appendGitVersions(
+						this.rightHistory[1],
+						this.gitVersions,
+						false
+					)
+				);
+				break;
+		}
+	}
+
+	// ========== Sync-specific methods ==========
+
+	private appendSyncVersions(
+		el: HTMLElement,
+		versions: gHResult,
+		left: boolean
+	): vSyncItem[] {
+		const versionList: vSyncItem[] = [];
+		for (let i = 0; i <= versions.items.length - 1; i++) {
+			let version = versions.items[i];
+			const date = new Date(version.ts);
+			const div = el.createDiv({
+				cls: ITEM_CLASS,
+				text: date.toDateString() + ', ' + date.toLocaleTimeString(),
+				attr: {
+					id: left ? this.ids.left : this.ids.right,
+				},
+			});
+			left ? (this.ids.left += 1) : (this.ids.right += 1);
+			const infoDiv = div.createDiv({
+				cls: ['u-muted'],
+				text: getSize(version.size) + ' KB [' + version.device + ']',
+			});
+			versionList.push({
+				html: div,
+				v: version,
+			});
+			div.addEventListener('click', async () => {
+				if (left) {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.leftVList,
+						this.leftActive,
+						left
+					)) as vSyncItem;
+					await this.getSyncContent(clickedEl, left);
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				} else {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.rightVList,
+						this.rightActive
+					)) as vSyncItem;
+					await this.getSyncContent(clickedEl);
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				}
+			});
+		}
+		return versionList;
+	}
+
+	private async getSyncContent(
+		clickedEl: vSyncItem,
+		left: boolean = false
+	): Promise<void> {
+		const getContent = this.plugin.diff_utils.getContent.bind(this);
+		if (left) {
+			this.leftContent = await getContent(clickedEl.v.uid);
+		} else {
+			this.rightContent = await getContent(clickedEl.v.uid);
+		}
+	}
+
+	private makeSyncButtons(): void {
+		this.leftMoreButton = this.leftHistory[0].createDiv({
+			cls: ['sync-history-load-more-button', 'diff'],
+			text: 'Load more',
+		});
+		this.rightMoreButton = this.rightHistory[0].createDiv({
+			cls: ['sync-history-load-more-button', 'diff'],
+			text: 'Load more',
+		});
+		this.setMoreButtonStyle();
+
+		for (const el of [this.leftMoreButton, this.rightMoreButton]) {
+			el.addEventListener('click', async () => {
+				const newVersions = await this.plugin.diff_utils.getVersions(
+					this.file,
+					this.syncVersions.items.last()?.uid
+				);
+				this.syncVersions.more = newVersions.more;
+				this.setMoreButtonStyle();
+
+				this.leftVList.push(
+					...this.appendSyncVersions(
+						this.leftHistory[1],
+						newVersions,
+						true
+					)
+				);
+				this.rightVList.push(
+					...this.appendSyncVersions(
+						this.rightHistory[1],
+						newVersions,
+						false
+					)
+				);
+				this.syncVersions.items.push(...newVersions.items);
+			});
+		}
+	}
+
+	private setMoreButtonStyle(): void {
+		if (!this.leftMoreButton || !this.rightMoreButton) return;
+		if (this.syncVersions.more) {
+			this.leftMoreButton.style.display = 'block';
+			this.rightMoreButton.style.display = 'block';
+		} else {
+			this.leftMoreButton.style.display = 'none';
+			this.rightMoreButton.style.display = 'none';
+		}
+	}
+
+	// ========== Recovery-specific methods ==========
+
+	private appendRecoveryVersions(
+		el: HTMLElement,
+		versions: recResult[],
+		left: boolean = false
+	): vRecoveryItem[] {
+		const versionList: vRecoveryItem[] = [];
+		for (let i = 0; i < versions.length; i++) {
+			const version = versions[i];
+			let date = new Date(version.ts);
+			if (i === 0) {
+				date = new Date();
+			}
+			let div = el.createDiv({
+				cls: ITEM_CLASS,
+				attr: {
+					id: left ? this.ids.left : this.ids.right,
+				},
+			});
+			left ? (this.ids.left += 1) : (this.ids.right += 1);
+			if (i === 0) {
+				div.createDiv({ text: 'State on disk' });
+				div.createDiv({ text: date.toLocaleTimeString() });
+			} else {
+				div.createDiv({
+					text: date.toDateString() + ', ' + date.toLocaleTimeString(),
+				});
+			}
+			versionList.push({
+				html: div,
+				data: version.data,
+			});
+			div.addEventListener('click', async () => {
+				if (left) {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.leftVList,
+						this.leftActive,
+						left
+					)) as vRecoveryItem;
+					this.leftContent = version.data;
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				} else {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.rightVList,
+						this.rightActive
+					)) as vRecoveryItem;
+					this.rightContent = version.data;
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				}
+			});
+		}
+		return versionList;
+	}
+
+	// ========== Git-specific methods ==========
+
+	private appendGitVersions(
+		el: HTMLElement,
+		versions: DefaultLogFields[],
+		left: boolean = false
+	): vGitItem[] {
+		const versionList: vGitItem[] = [];
+		for (let i = 0; i < versions.length; i++) {
+			const version = versions[i];
+			const div = el.createDiv({
+				cls: ITEM_CLASS,
+				attr: {
+					id: left ? this.ids.left : this.ids.right,
+				},
+			});
+			left ? (this.ids.left += 1) : (this.ids.right += 1);
+			const message = div.createDiv({
+				text: i !== 0 ? version.message : 'State on disk',
+			});
+			setTooltip(message, version.body !== '' ? version.body : '', {
+				placement: 'top',
+			});
+			const infoDiv = div.createDiv({
+				cls: ['u-muted'],
+			});
+			if (version.fileName !== this.file.path && i !== 0) {
+				const changedName = infoDiv.createDiv({
+					text: 'Old name: ' + version.fileName.slice(0, -3),
+				});
+			}
+			const date = infoDiv.createDiv({
+				text: version.date.split('T')[0],
+			});
+			const time = infoDiv.createDiv({
+				text: version.date.split('T')[1],
+			});
+			const author = infoDiv.createDiv({
+				text: version.author_name,
+			});
+			const hash = infoDiv.createDiv({
+				text: version.hash.slice(0, 7),
+			});
+			let refs;
+			const refsText = version.refs;
+			if (refsText !== '') {
+				refs = infoDiv.createDiv({
+					text: refsText,
+				});
+			}
+
+			hash.style.cursor = 'copy';
+			hash.addEventListener('click', async (mod) => {
+				mod.stopPropagation();
+				if (mod.shiftKey) {
+					navigator.clipboard.writeText(version.hash);
+				} else {
+					await navigator.clipboard.writeText(version.hash.slice(0, 7));
+				}
+			});
+			versionList.push({
+				html: div,
+				v: version,
+			});
+			div.addEventListener('click', async () => {
+				if (left) {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.leftVList,
+						this.leftActive,
+						left
+					)) as vGitItem;
+					if (this.leftActive === 0) {
+						this.leftContent = await this.app.vault.read(this.file);
+					} else {
+						this.leftContent = await this.app.plugins.plugins[
+							'obsidian-git'
+						].gitManager.show(clickedEl.v.hash, clickedEl.v.fileName);
+					}
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				} else {
+					const clickedEl = (await this.generateVersionListener(
+						div,
+						this.rightVList,
+						this.rightActive
+					)) as vGitItem;
+					if (this.rightActive === 0) {
+						this.rightContent = await this.app.vault.read(this.file);
+					} else {
+						this.rightContent = await this.app.plugins.plugins[
+							'obsidian-git'
+						].gitManager.show(clickedEl.v.hash, clickedEl.v.fileName);
+					}
+					this.syncHistoryContentContainer.innerHTML = this.getDiff();
+				}
+			});
+		}
+
+		return versionList;
+	}
+
+	// ========== Common methods ==========
 
 	public getDiff(): string {
-		// the second type is needed for the Git view, it reimplements getDiff
-		// get diff
 		const uDiff = createTwoFilesPatch(
 			this.file.basename,
 			this.file.basename,
 			this.leftContent,
 			this.rightContent
 		);
-
-		// create HTML from diff
 		const diff = html(uDiff, this.htmlConfig);
 		return diff;
 	}
 
 	public makeHistoryLists(warning: string): void {
-		// create both history lists
 		this.leftHistory = this.createHistory(this.contentEl, true, warning);
 		this.rightHistory = this.createHistory(this.contentEl, false, warning);
 	}
@@ -166,8 +705,9 @@ export default abstract class DiffView extends Modal {
 	}
 
 	public basicHtml(diff: string, diffType: string): void {
-		// set title
-		this.titleEl.setText(diffType);
+		// Create switcher in title area
+		this.createSwitcher();
+
 		// add diff to container
 		this.syncHistoryContentContainer.innerHTML = diff;
 
@@ -175,6 +715,59 @@ export default abstract class DiffView extends Modal {
 		this.contentEl.appendChild(this.leftHistory[0]);
 		this.contentEl.appendChild(this.syncHistoryContentContainer);
 		this.contentEl.appendChild(this.rightHistory[0]);
+	}
+
+	private createSwitcher(): void {
+		// Clear existing title content and create container
+		this.titleEl.empty();
+
+		const titleContainer = this.titleEl.createDiv({
+			cls: 'diff-title-container',
+		});
+
+		// Title text
+		titleContainer.createSpan({
+			text: this.file.basename,
+			cls: 'diff-title-text',
+		});
+
+		// Switcher buttons
+		this.switcherEl = titleContainer.createDiv({
+			cls: 'diff-type-switcher',
+		});
+
+		const types: { type: DiffType; label: string }[] = [
+			{ type: 'recovery', label: 'Recovery' },
+			{ type: 'git', label: 'Git' },
+			{ type: 'sync', label: 'Sync' },
+		];
+
+		for (const { type, label } of types) {
+			const btn = this.switcherEl.createEl('button', {
+				text: label,
+				cls: 'diff-type-btn',
+			});
+			if (type === this.currentType) {
+				btn.addClass('is-active');
+			}
+			// Disable Git if not available
+			if (type === 'git' && !this.app.plugins.plugins['obsidian-git']) {
+				btn.addClass('is-disabled');
+				btn.setAttribute('disabled', 'true');
+			}
+			btn.addEventListener('click', () => this.switchTo(type));
+		}
+	}
+
+	private updateSwitcherActive(): void {
+		if (!this.switcherEl) return;
+		const buttons = this.switcherEl.querySelectorAll('.diff-type-btn');
+		buttons.forEach((btn) => {
+			btn.removeClass('is-active');
+			if (btn.textContent?.toLowerCase() === this.currentType) {
+				btn.addClass('is-active');
+			}
+		});
 	}
 
 	public makeMoreGeneralHtml(): void {
@@ -194,10 +787,7 @@ export default abstract class DiffView extends Modal {
 		currentActive: number,
 		left: boolean = false
 	): Promise<vItem> {
-		// the exact return type depends on the type of currentVList, it is either vSyncItem or vRecoveryItem
-		// formerly active left/right version
 		const currentSideOldVersion = currentVList[currentActive];
-		// get the HTML of the new version to set it active
 		const idx = Number(div.id);
 		const clickedEl: vItem = currentVList[idx];
 		div.addClass('is-active');
@@ -206,7 +796,6 @@ export default abstract class DiffView extends Modal {
 		} else {
 			this.rightActive = idx;
 		}
-		// make old not active
 		if (Number.parseInt(currentSideOldVersion.html.id) !== idx) {
 			currentSideOldVersion.html.classList.remove('is-active');
 		}

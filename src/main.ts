@@ -1,10 +1,8 @@
-import { Command, Notice, Platform, Plugin, TFile } from 'obsidian';
+import { Command, Notice, Plugin, TFile } from 'obsidian';
 import type { OpenSyncHistorySettings } from './interfaces';
 import OpenSyncHistorySettingTab from './settings';
 import DiffUtils from './diff_utils';
-import SyncDiffView from './diff_view';
-import RecoveryDiffView from './recovery_diff_view';
-import GitDiffView from './git_diff_view';
+import DiffView, { DiffType } from './abstract_diff_view';
 
 const DEFAULT_SETTINGS: OpenSyncHistorySettings = {
 	//context: '3',
@@ -26,20 +24,12 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 		return newCommand;
 	};
 
-	openGitDiffModal(file: TFile): void {
-		if (this.app.plugins.plugins['obsidian-git']) {
-			new GitDiffView(this, this.app, file).open();
-		} else {
+	openDiffModal(file: TFile, type: DiffType = 'sync'): void {
+		if (type === 'git' && !this.app.plugins.plugins['obsidian-git']) {
 			new Notice('Obsidian Git is not enabled');
+			return;
 		}
-	}
-
-	openRecoveryDiffModal(file: TFile): void {
-		new RecoveryDiffView(this, this.app, file).open();
-	}
-
-	openDiffModal(file: TFile): void {
-		new SyncDiffView(this, this.app, file).open();
+		new DiffView(this, this.app, file, type).open();
 	}
 
 	giveCallback(
@@ -62,7 +52,9 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 		return {
 			id: 'open-sync-diff-view',
 			name: 'Show Sync diff view for active file',
-			checkCallback: this.giveCallback(this.openDiffModal.bind(this)),
+			checkCallback: this.giveCallback((file) =>
+				this.openDiffModal(file, 'sync')
+			),
 		};
 	}
 
@@ -70,8 +62,8 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 		return {
 			id: 'open-recovery-diff-view',
 			name: 'Show File Recovery diff view for active file',
-			checkCallback: this.giveCallback(
-				this.openRecoveryDiffModal.bind(this)
+			checkCallback: this.giveCallback((file) =>
+				this.openDiffModal(file, 'recovery')
 			),
 		};
 	}
@@ -80,7 +72,9 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 		return {
 			id: 'open-git-diff-view',
 			name: 'Show Git Diff view for active file',
-			checkCallback: this.giveCallback(this.openGitDiffModal.bind(this)),
+			checkCallback: this.giveCallback((file) =>
+				this.openDiffModal(file, 'git')
+			),
 		};
 	}
 
@@ -107,18 +101,18 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 						.addItem((sub) => {
 							sub.setTitle('File Recovery')
 								.setIcon('archive-restore')
-								.onClick(() => this.openRecoveryDiffModal(file));
+								.onClick(() => this.openDiffModal(file, 'recovery'));
 						})
 						.addItem((sub) => {
 							sub.setTitle('Git')
 								.setIcon('git-branch')
 								.setDisabled(!this.app.plugins.plugins['obsidian-git'])
-								.onClick(() => this.openGitDiffModal(file));
+								.onClick(() => this.openDiffModal(file, 'git'));
 						})
 						.addItem((sub) => {
 							sub.setTitle('Obsidian Sync')
 								.setIcon('sync')
-								.onClick(() => this.openDiffModal(file));
+								.onClick(() => this.openDiffModal(file, 'sync'));
 						});
 				});
 			})
