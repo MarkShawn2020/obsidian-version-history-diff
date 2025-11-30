@@ -1,6 +1,6 @@
 import { createTwoFilesPatch } from 'diff';
 import { Diff2HtmlConfig, html } from 'diff2html';
-import { App, Modal, Notice, setTooltip, TFile } from 'obsidian';
+import { App, Modal, setTooltip, TFile } from 'obsidian';
 import { FILE_REC_WARNING, GIT_WARNING, ITEM_CLASS, SYNC_WARNING } from './constants';
 import FileModal from './file_modal';
 import type {
@@ -104,7 +104,10 @@ export default class DiffView extends Modal {
 	async onOpen() {
 		super.onOpen();
 		document.addEventListener('keydown', this.keydownHandler);
-		await this.loadCurrentType();
+		const success = await this.loadCurrentType();
+		if (success === false) {
+			this.showErrorGuide();
+		}
 	}
 
 	onClose() {
@@ -157,9 +160,9 @@ export default class DiffView extends Modal {
 
 	// ========== Unified Type Switching ==========
 
-	private async loadCurrentType(): Promise<void> {
+	private async loadCurrentType(): Promise<void | boolean> {
 		const success = await this.initializeVersions();
-		if (success === false) return;
+		if (success === false) return false;
 
 		const diff = this.getDiff();
 		this.makeHistoryLists(this.getWarning());
@@ -174,16 +177,61 @@ export default class DiffView extends Modal {
 	async switchTo(type: DiffType): Promise<void> {
 		if (type === this.currentType) return;
 
-		// Check availability
-		if (type === 'git' && !this.app.plugins.plugins['obsidian-git']) {
-			new Notice('Obsidian Git is not enabled');
-			return;
-		}
-
 		this.currentType = type;
 		await this.reset();
-		await this.loadCurrentType();
+		const success = await this.loadCurrentType();
+		if (success === false) {
+			this.showErrorGuide();
+		}
 		this.updateSwitcherActive();
+	}
+
+	private showErrorGuide(): void {
+		// Create switcher so user can switch to other types
+		this.createSwitcher();
+
+		const guideEl = this.contentEl.createDiv({ cls: 'diff-error-guide' });
+
+		const icon = guideEl.createDiv({ cls: 'diff-error-icon' });
+		icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+
+		const title = guideEl.createDiv({ cls: 'diff-error-title' });
+		const desc = guideEl.createDiv({ cls: 'diff-error-desc' });
+
+		switch (this.currentType) {
+			case 'sync':
+				title.setText('Obsidian Sync not available');
+				desc.innerHTML = `
+					<p>To use Sync version history:</p>
+					<ol>
+						<li>Enable <strong>Sync</strong> in Settings → Core plugins</li>
+						<li>Set up and connect to your sync vault</li>
+						<li>Make sure this file has been synced</li>
+					</ol>
+				`;
+				break;
+			case 'git':
+				title.setText('Git not available');
+				desc.innerHTML = `
+					<p>To use Git version history:</p>
+					<ol>
+						<li>Install the <strong>Obsidian Git</strong> community plugin</li>
+						<li>Initialize a git repository in your vault</li>
+						<li>Commit changes to create version history</li>
+					</ol>
+				`;
+				break;
+			case 'recovery':
+				title.setText('No recovery snapshots');
+				desc.innerHTML = `
+					<p>File Recovery saves periodic snapshots of your files.</p>
+					<ol>
+						<li>Enable <strong>File Recovery</strong> in Settings → Core plugins</li>
+						<li>Edit and save the file to create snapshots</li>
+					</ol>
+				`;
+				break;
+		}
 	}
 
 	private async reset(): Promise<void> {
@@ -257,17 +305,20 @@ export default class DiffView extends Modal {
 	}
 
 	private async initSyncVersions(): Promise<void | boolean> {
-		this.syncVersions = await this.plugin.diff_utils.getVersions(this.file);
+		try {
+			this.syncVersions = await this.plugin.diff_utils.getVersions(this.file);
+		} catch (e) {
+			return false;
+		}
 		let [latestV, secondLatestV] = [0, 0];
 		if (this.syncVersions.items.length > 1) {
 			latestV = this.syncVersions.items[0].uid;
 			secondLatestV = this.syncVersions.items[1].uid;
 		} else {
-			new Notice('There are not at least two versions.');
 			return false;
 		}
 
-		const getContent = this.plugin.diff_utils.getContent.bind(this);
+		const getContent = this.plugin.diff_utils.getContent.bind(this.plugin.diff_utils);
 		[this.leftContent, this.rightContent] = [
 			await getContent(secondLatestV),
 			await getContent(latestV),
@@ -295,7 +346,6 @@ export default class DiffView extends Modal {
 			}
 		}
 		if (!(this.recoveryVersions.length > 1)) {
-			new Notice('There is not at least one version in the file recovery.');
 			return false;
 		}
 
@@ -309,7 +359,6 @@ export default class DiffView extends Modal {
 		const { gitManager } = this.app.plugins.plugins['obsidian-git'];
 		const gitVersions = await gitManager.log(this.file.path);
 		if (gitVersions.length === 0) {
-			new Notice('There are no commits for this file.');
 			return false;
 		}
 		this.gitVersions.push({
@@ -441,7 +490,7 @@ export default class DiffView extends Modal {
 		clickedEl: vSyncItem,
 		left: boolean = false
 	): Promise<void> {
-		const getContent = this.plugin.diff_utils.getContent.bind(this);
+		const getContent = this.plugin.diff_utils.getContent.bind(this.plugin.diff_utils);
 		if (left) {
 			this.leftContent = await getContent(clickedEl.v.uid);
 		} else {
@@ -750,8 +799,12 @@ export default class DiffView extends Modal {
 			if (type === this.currentType) {
 				btn.addClass('is-active');
 			}
-			// Disable Git if not available
+			// Disable if not available
 			if (type === 'git' && !this.app.plugins.plugins['obsidian-git']) {
+				btn.addClass('is-disabled');
+				btn.setAttribute('disabled', 'true');
+			}
+			if (type === 'sync' && !this.app.internalPlugins.plugins.sync?.instance) {
 				btn.addClass('is-disabled');
 				btn.setAttribute('disabled', 'true');
 			}
