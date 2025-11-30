@@ -95,6 +95,35 @@ export default class OpenSyncHistoryPlugin extends Plugin {
 		this.addCommand(this.returnGitDiffCommand());
 		// }
 
+		// Register file-menu items
+		this.registerEvent(
+			this.app.workspace.on('file-menu', (menu, file) => {
+				if (!(file instanceof TFile)) return;
+
+				menu.addItem((item) => {
+					item.setTitle('Version history diff')
+						.setIcon('git-compare')
+						.setSubmenu()
+						.addItem((sub) => {
+							sub.setTitle('File Recovery')
+								.setIcon('archive-restore')
+								.onClick(() => this.openRecoveryDiffModal(file));
+						})
+						.addItem((sub) => {
+							sub.setTitle('Git')
+								.setIcon('git-branch')
+								.setDisabled(!this.app.plugins.plugins['obsidian-git'])
+								.onClick(() => this.openGitDiffModal(file));
+						})
+						.addItem((sub) => {
+							sub.setTitle('Obsidian Sync')
+								.setIcon('sync')
+								.onClick(() => this.openDiffModal(file));
+						});
+				});
+			})
+		);
+
 		await this.loadSettings();
 
 		this.addSettingTab(new OpenSyncHistorySettingTab(this.app, this));
