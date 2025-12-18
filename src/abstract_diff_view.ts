@@ -1,11 +1,12 @@
 import { createTwoFilesPatch } from 'diff';
 import { Diff2HtmlConfig, html } from 'diff2html';
-import { App, Modal, setTooltip, TFile } from 'obsidian';
+import { App, Menu, Modal, Notice, setTooltip, TFile } from 'obsidian';
 import { FILE_REC_WARNING, GIT_WARNING, ITEM_CLASS, SYNC_WARNING } from './constants';
 import FileModal from './file_modal';
 import type {
 	DefaultLogFields,
 	gHResult,
+	item,
 	recResult,
 	vGitItem,
 	vItem,
@@ -482,8 +483,59 @@ export default class DiffView extends Modal {
 					this.syncHistoryContentContainer.innerHTML = this.getDiff();
 				}
 			});
+			div.addEventListener('contextmenu', (e) => {
+				e.preventDefault();
+				this.showSyncContextMenu(e, version);
+			});
 		}
 		return versionList;
+	}
+
+	private showSyncContextMenu(e: MouseEvent, version: item): void {
+		const menu = new Menu();
+		const date = new Date(version.ts);
+		const dateStr = date.toDateString() + ', ' + date.toLocaleTimeString();
+
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy date')
+				.setIcon('calendar')
+				.onClick(() => {
+					navigator.clipboard.writeText(dateStr);
+					new Notice('Date copied');
+				})
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy device')
+				.setIcon('monitor')
+				.onClick(() => {
+					navigator.clipboard.writeText(version.device);
+					new Notice('Device copied');
+				})
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy UID')
+				.setIcon('hash')
+				.onClick(() => {
+					navigator.clipboard.writeText(String(version.uid));
+					new Notice('UID copied');
+				})
+		);
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy content')
+				.setIcon('copy')
+				.onClick(async () => {
+					const content = await this.plugin.diff_utils.getContent(version.uid);
+					navigator.clipboard.writeText(content);
+					new Notice('Content copied');
+				})
+		);
+
+		menu.showAtMouseEvent(e);
 	}
 
 	private async getSyncContent(
@@ -601,8 +653,46 @@ export default class DiffView extends Modal {
 					this.syncHistoryContentContainer.innerHTML = this.getDiff();
 				}
 			});
+			div.addEventListener('contextmenu', (e) => {
+				e.preventDefault();
+				this.showRecoveryContextMenu(e, version, i === 0);
+			});
 		}
 		return versionList;
+	}
+
+	private showRecoveryContextMenu(
+		e: MouseEvent,
+		version: recResult,
+		isDisk: boolean
+	): void {
+		const menu = new Menu();
+		const date = new Date(isDisk ? Date.now() : version.ts);
+		const dateStr = isDisk
+			? 'State on disk - ' + date.toLocaleTimeString()
+			: date.toDateString() + ', ' + date.toLocaleTimeString();
+
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy date')
+				.setIcon('calendar')
+				.onClick(() => {
+					navigator.clipboard.writeText(dateStr);
+					new Notice('Date copied');
+				})
+		);
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy content')
+				.setIcon('copy')
+				.onClick(() => {
+					navigator.clipboard.writeText(version.data);
+					new Notice('Content copied');
+				})
+		);
+
+		menu.showAtMouseEvent(e);
 	}
 
 	// ========== Git-specific methods ==========
@@ -701,20 +791,104 @@ export default class DiffView extends Modal {
 					this.syncHistoryContentContainer.innerHTML = this.getDiff();
 				}
 			});
+			div.addEventListener('contextmenu', (e) => {
+				e.preventDefault();
+				this.showGitContextMenu(e, version, i === 0);
+			});
 		}
 
 		return versionList;
 	}
 
+	private showGitContextMenu(
+		e: MouseEvent,
+		version: DefaultLogFields,
+		isDisk: boolean
+	): void {
+		const menu = new Menu();
+
+		if (!isDisk) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Copy commit hash (short)')
+					.setIcon('hash')
+					.onClick(() => {
+						navigator.clipboard.writeText(version.hash.slice(0, 7));
+						new Notice('Short hash copied');
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle('Copy commit hash (full)')
+					.setIcon('hash')
+					.onClick(() => {
+						navigator.clipboard.writeText(version.hash);
+						new Notice('Full hash copied');
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle('Copy commit message')
+					.setIcon('message-square')
+					.onClick(() => {
+						navigator.clipboard.writeText(version.message);
+						new Notice('Message copied');
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle('Copy date')
+					.setIcon('calendar')
+					.onClick(() => {
+						navigator.clipboard.writeText(version.date);
+						new Notice('Date copied');
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle('Copy author')
+					.setIcon('user')
+					.onClick(() => {
+						navigator.clipboard.writeText(version.author_name);
+						new Notice('Author copied');
+					})
+			);
+			menu.addSeparator();
+		}
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy content')
+				.setIcon('copy')
+				.onClick(async () => {
+					let content: string;
+					if (isDisk) {
+						content = await this.app.vault.read(this.file);
+					} else {
+						content = await this.app.plugins.plugins[
+							'obsidian-git'
+						].gitManager.show(version.hash, version.fileName);
+					}
+					navigator.clipboard.writeText(content);
+					new Notice('Content copied');
+				})
+		);
+
+		menu.showAtMouseEvent(e);
+	}
+
 	// ========== Common methods ==========
 
-	public getDiff(): string {
-		const uDiff = createTwoFilesPatch(
+	public getUnifiedDiff(): string {
+		return createTwoFilesPatch(
 			this.file.basename,
 			this.file.basename,
 			this.leftContent,
 			this.rightContent
 		);
+	}
+
+	public getDiff(): string {
+		const uDiff = this.getUnifiedDiff();
 		const diff = html(uDiff, this.htmlConfig);
 		return diff;
 	}
@@ -760,10 +934,61 @@ export default class DiffView extends Modal {
 		// add diff to container
 		this.syncHistoryContentContainer.innerHTML = diff;
 
+		// add context menu for diff area
+		this.syncHistoryContentContainer.addEventListener('contextmenu', (e) => {
+			// Don't show menu if text is selected (allow native copy)
+			const selection = window.getSelection();
+			if (selection && selection.toString().length > 0) {
+				return;
+			}
+			e.preventDefault();
+			this.showDiffContextMenu(e);
+		});
+
 		// add history lists and diff to DOM
 		this.contentEl.appendChild(this.leftHistory[0]);
 		this.contentEl.appendChild(this.syncHistoryContentContainer);
 		this.contentEl.appendChild(this.rightHistory[0]);
+	}
+
+	private showDiffContextMenu(e: MouseEvent): void {
+		const menu = new Menu();
+
+		menu.addItem((item) =>
+			item
+				.setTitle('Copy diff')
+				.setIcon('copy')
+				.onClick(() => {
+					navigator.clipboard.writeText(this.getUnifiedDiff());
+					new Notice('Diff copied');
+				})
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Save as patch file')
+				.setIcon('download')
+				.onClick(async () => {
+					const patchContent = this.getUnifiedDiff();
+					const fileName = `${this.file.basename}.patch`;
+					const folder = this.file.parent?.path || '';
+					const filePath = folder ? `${folder}/${fileName}` : fileName;
+
+					try {
+						await this.app.vault.create(filePath, patchContent);
+						new Notice(`Patch saved: ${filePath}`);
+					} catch (err) {
+						// File might already exist, try with timestamp
+						const ts = Date.now();
+						const uniquePath = folder
+							? `${folder}/${this.file.basename}-${ts}.patch`
+							: `${this.file.basename}-${ts}.patch`;
+						await this.app.vault.create(uniquePath, patchContent);
+						new Notice(`Patch saved: ${uniquePath}`);
+					}
+				})
+		);
+
+		menu.showAtMouseEvent(e);
 	}
 
 	private createSwitcher(): void {
