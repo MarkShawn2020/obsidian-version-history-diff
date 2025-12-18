@@ -1,57 +1,117 @@
-# Version History Diff (for Sync and File Recovery Core plugins and Git)
+<p align="center">
+  <img src="docs/images/cover.png" alt="Version History Diff Cover" width="100%">
+</p>
 
-## Note
+<h1 align="center">
+  <img src="assets/logo.svg" width="32" height="32" alt="Logo" align="top">
+  Version History Diff
+</h1>
 
-This plugin uses private APIs, so it may break at any time. Use at your own risk.
+<p align="center">
+  <strong>Compare and restore file versions from Sync, File Recovery, and Git</strong><br>
+  <sub>Obsidian Plugin</sub>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#screenshots">Screenshots</a> •
+  <a href="#credits">Credits</a>
+</p>
+
+---
+
+> **Note:** This plugin uses private Obsidian APIs and may break with updates. Use at your own risk.
 
 ## Features
 
-It can 
+- **Multi-source diff** — View version history from Obsidian Sync, File Recovery, or Git
+- **Side-by-side comparison** — Choose between line-by-line or side-by-side view
+- **Version preview** — Render any version as markdown or plain text before restoring
+- **One-click restore** — Overwrite current file with any previous version
+- **In-modal switching** — Switch between Sync/Recovery/Git without closing the modal
+- **Colour-blind mode** — Accessible diff highlighting
+- **Keyboard navigation** — Arrow keys to navigate versions
+- **Context menu** — Right-click to copy content, dates, commit hashes, or save patches
 
-1. display diffs of the **Sync** 
-2. and the **File Recovery** 
-3. and **Git** version history for the currently active file, 
-   - For this to work, the [Obsidian Git](https://obsidian.md/plugins?id=obsidian-git) plugin needs to be installed.
-4. open a selected version in a modal and 
-5. render it as either markdown or 
-6. plain text and 
-7. you can overwrite the file with this version as well. 
-8. There is a colour-blind mode
-9. And you can switch between `line-by-line` and `side-by-side` view in the settings. The latter is only recommended on bigger screens.
+## Installation
 
-The reason for showing you the note before you revert to this state is that the diffs can be misleading.
+### From Obsidian Community Plugins
 
-### Sync Diff example
+1. Open **Settings** → **Community plugins** → **Browse**
+2. Search for "Version History Diff"
+3. Click **Install**, then **Enable**
 
-![Sync Diff changes modal](https://raw.githubusercontent.com/kometenstaub/obsidian-version-history-diff/main/demo/sync-diff.png)
+### Manual Installation
 
-![Sync Diff rendered version](https://raw.githubusercontent.com/kometenstaub/obsidian-version-history-diff/main/demo/sync-diff-2.png)
-
-![Sync Diff plain text version](https://raw.githubusercontent.com/kometenstaub/obsidian-version-history-diff/main/demo/sync-diff-3.png)
-
-### Git Diff example with colour-blind mode
-
-![Git Diff dark mode colourblind mode deletion](https://raw.githubusercontent.com/kometenstaub/obsidian-version-history-diff/main/demo/git-diff-colorblind.png)
-
-![Git Diff light mode colourblind mode addition](https://raw.githubusercontent.com/kometenstaub/obsidian-version-history-diff/main/demo/git-diff-colorblind-light.png)
+1. Download the latest release from [GitHub Releases](https://github.com/kometenstaub/obsidian-version-history-diff/releases)
+2. Extract to your vault's `.obsidian/plugins/` folder
+3. Enable the plugin in Settings → Community plugins
 
 ## Usage
 
-There are two columns. The chosen version on the right side should be newer than the one on the left side for the diffs to make sense.
+Open the command palette (`Cmd/Ctrl + P`) and search for:
+- **Version history diff: Show Sync diff view**
+- **Version history diff: Show File Recovery diff view**
+- **Version history diff: Show Git diff view**
 
-I personally find the file recovery diffs better as they are less frequent, but the Sync diffs might be helpful as well.
+Or right-click any file → **Version history diff** → Choose source
 
-For *Sync*, it only displays the Sync versions. For *File Recovery* and *Git*, it also shows the current state of the file from disk as latest version.
+### Tips
 
-The Git diff lets you copy the hash by clicking on it. By default, only the first seven characters are copied. `Shift-click` to copy the full hash.
+| Feature | Description |
+|---------|-------------|
+| Two columns | Left = older version, Right = newer version |
+| Copy hash | Click git hash to copy (Shift+click for full hash) |
+| Arrow keys | Navigate versions with ↑↓, switch columns with ←→ |
+| Right-click | Context menu for copy/save options |
+
+For Git integration, install the [Obsidian Git](https://obsidian.md/plugins?id=obsidian-git) plugin.
+
+## Screenshots
+
+### Sync Diff View
+
+![Sync Diff changes modal](demo/sync-diff.png)
+
+### Version Preview
+
+![Sync Diff rendered version](demo/sync-diff-2.png)
+
+![Sync Diff plain text version](demo/sync-diff-3.png)
+
+### Git Diff with Colour-blind Mode
+
+![Git Diff dark mode](demo/git-diff-colorblind.png)
+
+![Git Diff light mode](demo/git-diff-colorblind-light.png)
+
+## Settings
+
+| Setting | Options | Description |
+|---------|---------|-------------|
+| Diff style | Word / Character | Granularity of diff highlighting |
+| Output format | Line-by-line / Side-by-side | Layout mode (side-by-side for larger screens) |
+| Match threshold | 0-1 | Similarity threshold for word matching |
+| Colour blindness | On/Off | Alternative colour scheme for accessibility |
 
 ## Contributing
 
-**Please open an issue before you make a PR.**
+Please open an issue before submitting a PR.
 
 ## Credits
 
-All licenses and attributions can be found in the `esbuild.mjs` file for the code (and therefore in the `main.js` release), the CSS license is in `src/styles.scss`. Should any license/attribution be missing, please let me know, and I will look into it.
+- [@SlRvb](https://github.com/SlRvb) — CSS adaptation and colour-blind mode
+- [@Vinzent03](https://github.com/Vinzent03) — Obsidian Git API integration
 
+### Dependencies
 
-Special thanks to @SlRvb for adapting the CSS to Obsidian and making the colour-blind mode and to @Vinzent03 for creating the necessary APIs in the Obsidian Git plugin.
+- [diff](https://github.com/kpdecker/jsdiff) — Generate unified diffs
+- [diff2html](https://github.com/rtfpessoa/diff2html) — Render diffs as HTML
+
+Full license attributions are in [`esbuild.mjs`](esbuild.mjs) and [`src/styles.scss`](src/styles.scss).
+
+## License
+
+MIT
